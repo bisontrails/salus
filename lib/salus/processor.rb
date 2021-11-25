@@ -15,7 +15,8 @@ module Salus
     DEFAULT_CONFIG_SOURCE = "file:///salus.yaml".freeze
 
     def initialize(configuration_sources = [], repo_path: DEFAULT_REPO_PATH, filter_sarif: "",
-                   ignore_config_id: "")
+                   ignore_config_id: "", cli_scanners_to_run: [],
+                   report_filter: DEFAULT_REPORT_FILTER)
       @repo_path = repo_path
       @filter_sarif = filter_sarif
       ignore_ids = ignore_config_id.split(',').map(&:strip)
@@ -35,6 +36,8 @@ module Salus
       end
 
       @config = Salus::Config.new(source_data, ignore_ids)
+      @config.active_scanners = Set.new(cli_scanners_to_run) if !cli_scanners_to_run.empty?
+
       report_uris = interpolate_local_report_uris(@config.report_uris)
       sources = {
         sources: {
@@ -51,7 +54,8 @@ module Salus
         config: @config.to_h.merge(sources),
         repo_path: repo_path,
         filter_sarif: filter_sarif,
-        ignore_config_id: ignore_config_id
+        ignore_config_id: ignore_config_id,
+        report_filter: report_filter
       )
     end
 
@@ -109,6 +113,32 @@ module Salus
         end
         Salus::PluginManager.send_event(:scanners_ran, scanners_ran, @report)
       end
+    end
+
+    def create_full_sarif_diff(sarif_diff_full)
+      sarif_file_new = sarif_diff_full[0]
+      sarif_file_old = sarif_diff_full[1]
+
+      puts "\nCreating full sarif diff report from #{sarif_file_new} and #{sarif_file_old}"
+
+      [sarif_file_new, sarif_file_old].each do |f|
+        raise Exception, "sarif diff file name is empty #{f}" if f.nil? || f == ""
+      end
+
+      sarif_file_new = File.join(@repo_path, sarif_file_new)
+      sarif_file_old = File.join(@repo_path, sarif_file_old)
+
+      [sarif_file_new, sarif_file_old].each do |f|
+        if !Salus::Report.new(repo_path: @repo_path).safe_local_report_path?(f)
+          raise Exception, "sarif diff file path should not be outside working dir #{f}"
+        end
+      end
+
+      sarif_new = JSON.parse(File.read(sarif_file_new))
+      sarif_old = JSON.parse(File.read(sarif_file_old))
+      filtered_full_sarif = Sarif::BaseSarif.report_diff(sarif_new, sarif_old)
+
+      @report.full_diff_sarif = filtered_full_sarif
     end
 
     # Returns an ASCII version of the report.
